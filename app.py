@@ -2,53 +2,47 @@ import streamlit as st
 import numpy as np
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
 
 # --------------------------------------------------
 # PAGE CONFIG
 # --------------------------------------------------
 st.set_page_config(
-    page_title="Legal Document Analysis – RAG",
+    page_title="Legal Document Analysis",
     layout="wide"
 )
 
 # --------------------------------------------------
-# DARK THEME (STREAMLIT CLOUD SAFE)
+# DARK THEME
 # --------------------------------------------------
 st.markdown("""
 <style>
-html, body, .stApp {
-    background-color: #000000;
-    color: #ffffff;
-}
-h1, h2, h3 {
-    color: #ffffff;
-}
+html, body, .stApp { background-color: #000; color: #fff; }
+h1, h2, h3 { color: #fff; }
 input, textarea {
-    background-color: #000000 !important;
-    color: #ffffff !important;
+    background-color: #000 !important;
+    color: #fff !important;
     border: 1px solid #8b5cf6 !important;
 }
 button {
-    background-color: #000000 !important;
-    color: #ffffff !important;
+    background-color: #000 !important;
+    color: #fff !important;
     border: 1px solid #8b5cf6 !important;
 }
-button:hover {
-    background-color: #8b5cf6 !important;
-    color: #000000 !important;
-}
+button:hover { background-color: #8b5cf6 !important; color: #000 !important; }
 .answer-box {
     border-left: 4px solid #8b5cf6;
     padding: 14px;
     background-color: #050505;
+    margin-bottom: 10px;
 }
 .source-box {
     border: 1px solid #222;
     padding: 8px;
-    margin-bottom: 6px;
     background-color: #020202;
+    margin-bottom: 6px;
 }
-footer {visibility: hidden;}
+footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -56,10 +50,10 @@ footer {visibility: hidden;}
 # HEADER
 # --------------------------------------------------
 st.markdown("<h1 style='text-align:center;'>LEGAL DOCUMENT ANALYSIS & Q&A</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;'>Semantic Search over Legal PDFs</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;'>Semantic Search on Legal PDFs</p>", unsafe_allow_html=True)
 
 # --------------------------------------------------
-# LOAD EMBEDDING MODEL (CLOUD SAFE)
+# LOAD EMBEDDING MODEL
 # --------------------------------------------------
 @st.cache_resource
 def load_model():
@@ -68,11 +62,11 @@ def load_model():
 model = load_model()
 
 # --------------------------------------------------
-# SIDEBAR – FILE UPLOAD
+# SIDEBAR
 # --------------------------------------------------
-st.sidebar.markdown("### Upload Legal PDFs")
+st.sidebar.markdown("### Upload Legal PDF Files")
 uploaded_files = st.sidebar.file_uploader(
-    "PDF files only",
+    "PDF only",
     type=["pdf"],
     accept_multiple_files=True
 )
@@ -90,16 +84,17 @@ def split_text(text, chunk_size=800, overlap=150):
     return chunks
 
 # --------------------------------------------------
-# BUILD VECTOR STORE
+# BUILD SEARCH INDEX (NO FAISS)
 # --------------------------------------------------
 @st.cache_resource(show_spinner=True)
-def build_vector_store(files):
+def build_search_index(files):
     texts = []
     sources = []
 
     for file in files:
         reader = PdfReader(file)
         full_text = ""
+
         for page in reader.pages:
             if page.extract_text():
                 full_text += page.extract_text()
@@ -109,38 +104,37 @@ def build_vector_store(files):
         sources.extend([file.name] * len(chunks))
 
     embeddings = model.encode(texts)
-    embeddings = np.array(embeddings).astype("float32")
 
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(embeddings)
+    nn = NearestNeighbors(n_neighbors=4, metric="cosine")
+    nn.fit(embeddings)
 
-    return index, texts, sources
+    return nn, texts, sources
 
 # --------------------------------------------------
-# MAIN LOGIC
+# MAIN APP
 # --------------------------------------------------
 if uploaded_files:
-    index, texts, sources = build_vector_store(uploaded_files)
+    nn, texts, sources = build_search_index(uploaded_files)
 
     query = st.text_input("Ask a legal question")
 
     if query:
         with st.spinner("Searching documents..."):
-            query_embedding = model.encode([query]).astype("float32")
-            distances, indices = index.search(query_embedding, 4)
+            query_embedding = model.encode([query])
+            distances, indices = nn.kneighbors(query_embedding)
 
-        st.markdown("### Answer (Relevant Extracts)")
-        for i in indices[0]:
+        st.markdown("### Relevant Results")
+        for idx in indices[0]:
             st.markdown(
-                f"<div class='answer-box'>{texts[i]}</div>",
+                f"<div class='answer-box'>{texts[idx]}</div>",
                 unsafe_allow_html=True
             )
 
         st.markdown("### Source Documents")
-        for i in indices[0]:
+        for idx in indices[0]:
             st.markdown(
-                f"<div class='source-box'>{sources[i]}</div>",
+                f"<div class='source-box'>{sources[idx]}</div>",
                 unsafe_allow_html=True
             )
 else:
-    st.info("Upload legal PDF files from the sidebar to begin.")
+    st.info("Upload legal PDF documents from the sidebar to begin.")
